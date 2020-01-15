@@ -1,0 +1,368 @@
+library(shiny)
+library(agricolae)
+library(ggplot2)
+library(plotly)
+library(gridExtra)
+library(shinydashboard)
+##library(shinydashboardPlus)
+
+##This shiny app uses the agricolae package for experimental design. 
+##Randomization is based on RCBD but more randomizations will be availalble in the future
+
+## .....Thus, the three principles of experimental design are: 
+## replication, to provide an estimate of experimental error; 
+## randomization, to ensure that this estimate is statistically valid; 
+## local control, to reduce experimental error by making the experiment more efficient.
+## https://www.lar.msstate.edu/pdf/Basics%20of%20Experimental%20Design.pdf
+
+##power.t.test(n = NULL, delta = NULL, sd = 1, sig.level = 0.05,
+##power = NULL,
+##type = c("two.sample", "one.sample", "paired"),
+##alternative = c("two.sided", "one.sided"),
+##strict = FALSE, tol = .Machine$double.eps^0.25)
+
+rbrewerpallist<-c(
+  "Accent", "Dark2", "Paired", "Pastel1", "Pastel2", "Set1", "Set2", "Set3", ##qual pal
+  "BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "Spectral", ##div pal
+  "Blues", "BuGn", "BuPu", "GnBu", "Greens", "Greys", "Oranges", "OrRd", "PuBu", 
+  "PuBuGn", "PuRd", "Purples", "RdPu", "Reds", "YlGn", "YlGnBu", "YlOrBr", "YlOrRd" ##seq pal
+)
+
+plot_theme<-
+    theme_bw()+
+  theme(plot.title = element_text(size = 15,
+                                  margin=margin(0,0,30,0), 
+                                  hjust = .5,
+                                  face="bold"),
+                  legend.title=element_text(size=15), 
+                  legend.text=element_text(size=15),
+                  strip.text.x = element_text(size=15),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y= element_text(size=15),
+                  axis.text.x = element_text(size=15),
+                  axis.text.y = element_text(size=15))
+
+  
+        
+ui <- fluidPage(
+  tags$head(
+    tags$style(HTML("hr {border-top: 1px solid #000000;}"))
+  ),
+  # Application title
+  titlePanel("Design of Experiment Generator"),
+  # Sidebar layout with input and output definitions ----
+  sidebarLayout(
+    # Sidebar panel for inputs ----
+    sidebarPanel(
+      conditionalPanel(condition="input.conditionedPanels==1",
+                       helpText("Enter values to create exp design. PRESS SUMBIT once the values are entered. 
+                                You may repeat the process as often as you see fit"),
+                       radioButtons("design_type","Select design type:",
+                                    choices=c(Randomized_Complete_Block_Design = "RCBD", 
+                                             Balanced_Incomplete_Block_Design= "BIB", 
+                                              Split_Plot_Design = "Split_plot"),
+                                    ##inline= "TRUE",
+                                    selected="RCBD"),
+                       numericInput('seed',"Set seed (randomization number):", value="9999", min=1, max=9999),
+                       numericInput('r',"Number of replicates:", value="16", min=1, max=9999),
+                       conditionalPanel(condition = "input.design_type == 'BIB'",
+                                        helpText("if k is odd, enter numbers 6,12,18... for replicates"),
+                                        helpText("if k is even, enter numbers 4,8,12,16... for replicates"),
+                       numericInput('k',"k (Size block= to num trt or less):", value="3", min=1, max=9999)),
+                       textInput('trt',"Treatments:", value="Example1,Example2,Example3", placeholder = "type list of trts seperated by comma. Ex: UTC,trt1,trt2,trt3"),
+                       conditionalPanel(condition = "input.design_type == 'Split_plot'",
+                                        textInput('trt2',"Treatments2:", value="ex1,ex2", 
+                                                  placeholder = "type in list of trts seperated by comma. Ex: UTC,Serenade, Minuet")),
+                       conditionalPanel(condition="input.design_type !='BIB'",
+                       radioButtons("shelves","How many shelves?",
+                                    choices = c(One = "1",
+                                                Two = "2",
+                                                Three = "3", 
+                                                Four= "4"),
+                                    inline= "TRUE",
+                                    selected = "2")),
+                       conditionalPanel(condition="input.design_type=='RCBD'",
+                       radioButtons("blockingdir","Blocking direction:",
+                                    choices = c(horizontally = "horizontal",
+                                                vertically = "vertical"),
+                                    inline= "TRUE",
+                                    selected = "horizontal")),
+                       actionButton("submit_val", label= "Submit Values"),
+                       downloadButton("datafile", label = "Download data file"),
+                       hr(),
+      ##conditionalPanel(condition="input.conditionedPanels==3",
+                       helpText("Additional Plot Features"),
+                       checkboxInput("addlabel", "Add treatment labels", value= FALSE),
+      conditionalPanel(condition="input.design_type =='Split_plot'",
+                       checkboxInput("add2ndlabel", "Add 2nd treatment labels", value= FALSE)),
+                       selectInput('colorsss', "Change the color of your plot",
+                                   choices = c(None = '.', rbrewerpallist),
+                                   selected = ".")),
+                       ##sliderInput('plotHeight', 'Height of plot (in pixels)', 
+                         ##          min = 100, max = 2000, value = 1000)),
+      conditionalPanel(condition="input.conditionedPanels==2",
+                       helpText("Power test (power.t.test). Enter values in all cells EXCEPT for one and press 'Submit'"),
+                       textInput("nrep", "Number of observations per group (replications):", value=""),
+                       textInput("deltafc", "True difference in means between groups (Ex: sample mean- UTC mean):",value = "1"),
+                       textInput("sd", "Standard deviation (Mean of pooled Stdev or choose the highest one):", value = "1"),
+                       textInput("siglevel","Significance level(Probability of finding an effect that is not there):", value="0.05"), 
+                       textInput("power","Power (Probability of finding an effect that is there):", value="0.8"),
+                       actionButton("submit_power", label= "Submit")
+                       
+      )), 
+    
+    mainPanel(
+      tabsetPanel(type= "pills",
+                  tabPanel("Spreadsheet Table", tableOutput('table'), value=1),
+                  tabPanel("Design Plot", plotOutput('design_plot', height="600px"), value=1),
+                  tabPanel("Data Structure", verbatimTextOutput('structure'), value = 1,
+                           tags$head(tags$style(HTML("
+                                                     #structure {
+                                                     font-size: 20px;
+                                                     }
+                                                     ")))),
+                  tabPanel("Power Test", verbatimTextOutput('powertest'), value= 2,
+                           tags$head(tags$style(HTML("
+                                                     #powertest {
+                                                     font-size: 20px;
+                                                     }
+                                                     ")))),
+                  id = "conditionedPanels"))
+                           ))
+
+
+server <- function(input, output, session) {
+  updateSelectInput(session, inputId = 'colorsss', 
+                    label = "Change the color of your plot",
+                    choices = c(None = '.', rbrewerpallist), 
+                    selected = "Set3")
+  designing_split<-eventReactive(
+    input$submit_val,
+    {trts<-unlist(strsplit(input$trt,","))
+     trt2<-unlist(strsplit(input$trt2,","))
+      designer<- design.split(trt1= trts, 
+                              trt2= trt2,
+                              r= input$r,
+                              serie = 1,
+                              seed= input$seed)
+      designerb<- as.data.frame(designer$book)
+      designerb$plots<-as.factor(designerb$plots)
+      designerb$pot_num<- 1:length(designerb$trts)
+      designerb <- transform(designerb,trt_id=as.numeric(factor(trts)))
+      designerb$trt_id <- sapply(designerb$trt_id, function(x)letters[x])
+      if (input$shelves== "1"){
+        designerb$shelf<-c(rep(c("Shelf1"), each= nrow(designerb)))
+        
+      } else if (input$shelves== "2"){
+        designerb$shelf<-c(rep(c("Shelf1","Shelf2"), each= nrow(designerb)/2))
+        
+      } else if (input$shelves== "3"){
+        designerb$shelf<-c(rep(c("Shelf1", "Shelf2", "Shelf3"), each= nrow(designerb)/3))
+        
+      } else if (input$shelves== "4"){
+        designerb$shelf<-c(rep(c("Shelf1", "Shelf2", "Shelf3", "Shelf4"), each= nrow(designerb)/4))
+        
+      }
+      
+      return(designerb)
+    })
+  designing_bib<-eventReactive(
+    input$submit_val,
+    {trts<-unlist(strsplit(input$trt,","))
+    designer<- design.bib(trt= trts, 
+                            k= input$k,
+                            r= input$r,
+                            serie = 1,
+                            seed= input$seed)
+    designerb<- as.data.frame(designer$book)
+    designerb$plot_rows<-as.factor((input$k):1)
+    designerb$pot_num<- 1:length(designerb$trts)
+    designerb <- transform(designerb,trt_id=as.numeric(factor(trts)))
+    designerb$trt_id <- sapply(designerb$trt_id, function(x)letters[x])
+    return(designerb)
+    })
+  
+  designing<-eventReactive(
+    input$submit_val,
+    {trts<-unlist(strsplit(input$trt,","))
+    if (input$blockingdir== "vertical"){
+      designer<- design.rcbd(trt= trts, 
+                             r= input$r, 
+                             serie=1,
+                             seed= input$seed, 
+                             kinds= "Super-Duper")
+      designerb<- as.data.frame(designer$book)
+      designerb$row<- as.numeric(length(trts):1)
+      designerb$column<-as.factor(as.character(designerb$block))
+      designerb$column<-factor(designerb$column, levels= unique(designerb$column))
+      designerb$pot_num<- 1:length(designerb$trts)
+      designerb <- transform(designerb,trt_id=as.numeric(factor(trts)))
+      designerb$trt_id <- sapply(designerb$trt_id, function(x)letters[x])
+    }
+    else{
+      designer<- design.rcbd(trt= trts,
+                             r= input$r, 
+                             serie=1,
+                             seed= input$seed, 
+                             kinds= "Super-Duper")
+      designerb<- as.data.frame(designer$book)
+      designerb$column<- as.factor(1:length(trts))
+      designerb$row<-as.numeric(rev(designerb$block))
+      ##designerb$row<-factor(designerb$row, levels= unique(designerb$row))
+      designerb$pot_num<- 1:length(designerb$trts)
+      designerb <- transform(designerb,trt_id=as.numeric(factor(trts)))
+      designerb$trt_id <- sapply(designerb$trt_id, function(x)letters[x])
+    }
+    
+    if (input$shelves== "1"){
+      designerb$shelf<-c(rep(c("Shelf1"), each= nrow(designerb)))
+      
+    } else if (input$shelves== "2"){
+      designerb$shelf<-c(rep(c("Shelf1","Shelf2"), each= nrow(designerb)/2))
+      
+    } else if (input$shelves== "3"){
+      designerb$shelf<-c(rep(c("Shelf1", "Shelf2", "Shelf3"), each= nrow(designerb)/3))
+      
+    } else if (input$shelves== "4"){
+      designerb$shelf<-c(rep(c("Shelf1", "Shelf2", "Shelf3", "Shelf4"), each= nrow(designerb)/4))
+      
+    }
+    
+    return(designerb)
+    }
+  )
+  
+  output$table <- renderTable({
+    if(input$design_type=="RCBD"){
+    designing()}
+    else if(input$design_type=="Split_plot"){
+      designing_split()}
+    else if(input$design_type=="BIB"){
+      designing_bib()
+    }
+  })
+  
+  output$structure<-renderPrint({
+    if(input$design_type=="RCBD"){
+      str(designing())}
+    else if(input$design_type=="Split_plot"){
+      str(designing_split())}
+    else if(input$design_type=="BIB"){
+      str(designing_bib())
+    }
+  })
+  
+  pwrrr<-eventReactive(
+    input$submit_power,
+    { 
+      cat(paste("n= number of replicates", 
+                "delta= true difference in means",
+                "sd= standard deviation of pooled means",
+                "sig.level= significance level (Type I error probability)",
+                "power= power of test(1 minus Type II error probability)",
+                "",
+                "",
+                sep="\n"))
+      n_1<-as.numeric(input$nrep)
+      delta_1<-as.numeric(input$deltafc)
+      sd_1<-as.numeric(input$sd)
+      siglevel_1<-as.numeric(input$siglevel)
+      power_1<-as.numeric(input$power)
+      
+      if (input$nrep==""){
+        n_1<-NULL } else {n_1}
+      if (input$deltafc==""){
+        delta_1<-NULL } else {delta_1}
+      if (input$sd==""){
+        sd_1<-NULL } else {sd_1}
+      if (input$siglevel==""){
+        siglevel_1<-NULL } else {siglevel_1}
+      if (input$power==""){
+        power_1<-NULL } else {power_1}
+      pwr<-power.t.test(
+        n = n_1,
+        delta = delta_1,
+        sd = sd_1,
+        sig.level = siglevel_1,
+        power = power_1)
+      return(pwr)}
+
+    ##type = c("two.sample", "one.sample", "paired"),
+    ##alternative = c("two.sided", "one.sided"),
+    ##strict = FALSE, tol = .Machine$double.eps^0.25)
+  )
+  
+  output$powertest<-renderPrint({
+    pwrrr()
+  })
+  
+  ##make design plot chart
+  
+  
+  output$design_plot <- renderPlot({ 
+    
+    if(input$design_type=="RCBD"){
+      p1<-ggplot(data= designing(), aes(x=column, y=row, fill=trts))+ 
+        ##geom_raster()+
+        geom_tile(colour = "black")+
+        facet_wrap(~shelf, scales= "free")+
+        ggtitle("Randomized Complete Block Design")+
+      scale_x_discrete(expand=c(0,0))+
+        scale_y_continuous(expand=c(0,0))
+        ##scale_y_discrete(expand=c(0,0))
+      }
+    else if(input$design_type=="Split_plot"){
+      p1<-ggplot(data= designing_split(), aes(x=plots, y=splots, fill=trts))+ 
+        scale_color_brewer(palette = "Dark2")+
+        geom_tile(colour = "black")+
+        facet_wrap(~shelf, ncol=1, scales= "free")+
+        ggtitle("Split Plot Design")+
+        scale_x_discrete(expand=c(0,0))+
+        scale_y_discrete(expand=c(0,0))
+                  if(input$add2ndlabel=="TRUE"){
+                    p1<-p1+ geom_text(aes(label=paste(trt2),vjust=1.0, hjust=-0.5))}
+                  else{p1}
+      }
+    else if(input$design_type=="BIB"){
+      p1<-ggplot(data= designing_bib(), aes(x=block, y=plot_rows, fill=trts))+ 
+        geom_tile(colour = "black")+
+        ggtitle("Balanced Incomplete Block Design")+  
+        scale_x_discrete(expand=c(0,0))+
+        scale_y_discrete(expand=c(0,0))
+}
+    
+    if (input$colorsss== "."){
+      p2<-p1+plot_theme
+      p2
+    }
+    else {
+      p2<-p1+scale_fill_brewer(palette = input$colorsss)+plot_theme
+      p2
+
+    }
+    if (input$addlabel== FALSE){
+      p2
+
+    }
+    else {
+      p3<-p2+geom_text(aes(label= paste(trts), vjust= -0.5))+
+        geom_text(aes(label= paste(pot_num), vjust= 1.0, hjust=1.0))
+        
+      p3
+
+
+    }
+    ##ggplotly(p2) %>% 
+      ##layout(height = input$plotHeight, autosize=TRUE)
+  })
+  
+  output$datafile <- downloadHandler(
+    filename = function() { 
+      paste("", Sys.Date(), ".csv", sep="_")
+    },
+    content = function(file) {
+      write.csv(designing(), file, row.names = FALSE)
+    })
+}
+
+shinyApp(ui = ui, server = server)
